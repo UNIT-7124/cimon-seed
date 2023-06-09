@@ -1,0 +1,69 @@
+---
+name: Monitor Docker Compose Build
+    
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+  
+permissions:
+  contents: read
+    
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+    
+jobs:
+  # The docker-compose job defines test scenario where we want Cimon to enforce
+  # egress network policy but, at the same time, ignore internal communication
+  # between containers managed by Docker Compose.
+  #
+  # The scenario is based on the official Try Compose tutorial available at
+  # https://docs.docker.com/compose/gettingstarted/. The Docker Compose project
+  # builds a simple Python web application, which uses the Flask framework,
+  # which in turn, connects to Redis and maintains a hit counter.
+  #
+  # The expected policy suggested by Cimon should not include IPs assigned to
+  # Docker containers, nor internal DNS hostnames, such as web and redis for
+  # web container and redis services respectively.
+  docker-compose:
+    name: Docker Compose
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:    
+      - name: Run Cimon
+        uses: CycodeLabs/cimon-action@v0
+        with:
+          client-id: ${{ secrets.CIMON_CLIENT_ID }}
+          secret: ${{ secrets.CIMON_SECRET }}
+          report-process-tree: true
+          prevent: true
+          allowed-hosts: >
+            dl-cdn.alpinelinux.org
+            files.pythonhosted.org
+            production.cloudflare.docker.com
+            pypi.org
+            registry-1.docker.io
+
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Create and Start Containers
+        run: |
+          docker compose \
+            --project-name cimon-tests \
+            --file tests/docker-compose/docker-compose.yaml \
+            up --detach
+    
+      - name: Run Tests
+        run: |
+          ./tests/docker-compose/test.sh
+        
+      - name: Stop and Remove Containers, Networks
+        run: |
+          docker compose \
+            --project-name cimon-tests \
+            --file tests/docker-compose/docker-compose.yaml \
+            down
